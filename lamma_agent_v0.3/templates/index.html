@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>AI Agent Terminal</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background: #1e1e1e; color: white; display: flex; flex-direction: column; height: 100vh; margin: 0; }
+        #chat-container { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 15px; }
+        .message { padding: 12px 18px; border-radius: 10px; max-width: 85%; line-height: 1.5; }
+        .user { background: #0078d4; align-self: flex-end; }
+        .bot { background: #333; align-self: flex-start; border: 1px solid #444; }
+        .system-note { font-size: 0.85em; color: #107c10; background: #000; padding: 5px; margin-top: 8px; border-radius: 4px; border-left: 3px solid #107c10; }
+        .table-container { overflow-x: auto; margin-top: 10px; background: #fff; color: #000; border-radius: 5px; padding: 5px; }
+        table { border-collapse: collapse; width: 100%; font-size: 0.9em; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        #input-area { background: #252526; padding: 20px; display: flex; gap: 10px; border-top: 1px solid #333; }
+        input { flex: 1; padding: 12px; border-radius: 5px; border: none; background: #3c3c3c; color: white; outline: none; }
+        button { padding: 10px 25px; background: #0078d4; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div id="chat-container"></div>
+    <div id="input-area">
+        <input type="text" id="userInput" placeholder="Ask about the DB or run a system command..." onkeydown="if(event.key==='Enter') sendMessage()">
+        <button onclick="sendMessage()">Send</button>
+    </div>
+
+    <script>
+        let currentPendingSql = null;
+
+        async function sendMessage() {
+            const input = document.getElementById('userInput');
+            const container = document.getElementById('chat-container');
+            const userText = input.value.trim();
+            if (!userText) return;
+
+            // Display User Message
+            container.innerHTML += `<div class="message user">${userText}</div>`;
+            input.value = '';
+            container.scrollTop = container.scrollHeight;
+
+            try {
+                const response = await fetch('/chat', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ message: userText, pending_sql: currentPendingSql })
+                });
+                
+                const data = await response.json();
+                currentPendingSql = data.pending_sql;
+
+                // Build Bot Response
+                let botHtml = `<div class="message bot">${data.response.replace(/\n/g, '<br>')}`;
+                
+                if (data.execution) {
+                    botHtml += `<div class="system-note">⚙️ ${data.execution}</div>`;
+                }
+                
+                if (data.data_table) {
+                    botHtml += `<div class="table-container">${data.data_table}</div>`;
+                }
+                
+                botHtml += `</div>`;
+                container.innerHTML += botHtml;
+                container.scrollTop = container.scrollHeight;
+
+            } catch (err) {
+                container.innerHTML += `<div class="message bot">❌ Connection Error: ${err.message}</div>`;
+            }
+        }
+    </script>
+</body>
+</html>

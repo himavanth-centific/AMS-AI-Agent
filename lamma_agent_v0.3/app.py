@@ -4,10 +4,12 @@ from flask import Flask, render_template, request, jsonify
 import ollama
 import json
 import re
+import oracledb
+from dotenv import load_dotenv
 
-# RAG Imports
+# Native Oracle AI Vector Store & HF Embeddings
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.vectorstores import Chroma
+from langchain_community.vectorstores.oraclevs import OracleVS
 
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'actions'))
 from actions import ACTION_MAP
@@ -15,18 +17,36 @@ from dbactions import execute_mssql_query
 
 app = Flask(__name__)
 
+# --- LOAD SECRETS ---
+load_dotenv()
+DB_USER = os.getenv("DB_USER")
+DB_PASSWORD = os.getenv("DB_PASSWORD")
+DB_DSN = os.getenv("DB_DSN")
+
 # --- INITIALIZE RAG ONCE ---
-# This ensures the search engine is ready in memory
-EMBED_MODEL = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-VECTOR_DB = Chroma(persist_directory="./chroma_db", embedding_function=EMBED_MODEL)
+# Initialize the upgraded embedding model globally so it doesn't reload on every question
+print("Waking up Oracle integration and embedding model...")
+EMBED_MODEL = HuggingFaceEmbeddings(model_name="all-MiniLM-L12-v2")
 
 def get_context(user_query):
+    conn = None
     try:
-        # 1. Try Vector Search (RAG)
-        docs = VECTOR_DB.similarity_search(user_query, k=2)
+        # 1. Connect to Oracle 23ai
+        conn = oracledb.connect(user=DB_USER, password=DB_PASSWORD, dsn=DB_DSN)
+        
+        # 2. Hook up LangChain to your existing vectorized schema table
+        vector_store = OracleVS(
+            client=conn,
+            embedding_function=EMBED_MODEL,
+            table_name="alips_schema_docs",
+            distance_strategy="COSINE"
+        )
+        
+        # 3. Perform the vector similarity search directly inside Oracle
+        docs = vector_store.similarity_search(user_query, k=4)
         context = "\n\n".join([d.page_content for d in docs])
 
-        # 2. FALLBACK: Keyword Logic for the Demo
+        # 4. FALLBACK: Keyword Logic for the Demo
         # If RAG returns nothing, we manually look for keywords
         if not context.strip():
             print("!!! RAG empty - using Keyword Fallback !!!")
@@ -41,8 +61,12 @@ def get_context(user_query):
                     
         return context
     except Exception as e:
-        print(f"RAG Error: {e}")
+        print(f"Oracle Retrieval Error: {e}")
         return ""
+    finally:
+        # Guarantee connection closes even if an error occurs
+        if conn:
+            conn.close()
     
 def load_prompt_template():
     """Loads the system prompt text WITHOUT replacing the schema tag yet."""
@@ -74,6 +98,7 @@ def chat():
     print("---------------------*** Query Start ***-------------------------------")
     data = request.json
     user_input = data.get("message", "")
+    history = data.get("history", [])
     pending_sql = data.get("pending_sql")
 
     # 1. SQL Execution Confirmation
@@ -86,22 +111,33 @@ def chat():
         })
 
     # 2. RAG RETRIEVAL: Find the specific tables for THIS question
-    print(f"*** Searching schema for: {user_input}")
+    print(f"*** Searching Oracle schema for: {user_input}")
     retrieved_schema = get_context(user_input)
     
     # 3. DYNAMIC PROMPT: Inject the found schema into your specific template
     final_prompt = BASE_PROMPT_TEMPLATE.replace("{schema_content}", retrieved_schema)
     print(retrieved_schema, '\n\n\n', final_prompt)
-    # 4. CALL LLAMA (Using 1B to fit in your 2.8GB free RAM)
-    print(f"*** Calling Llama 1B...")
+    
+    messages = [{'role': 'system', 'content': final_prompt}]
+    
+    for turn in history:
+        messages.append({'role': 'user', 'content': turn['user']})
+        messages.append({'role': 'assistant', 'content': turn['ai']})
+    
+    messages.append({'role': 'user', 'content': user_input})   
+     
+    # 4. CALL LLAMA 
+    print(f"*** Calling Llama...")
     try:
         response = ollama.chat(
             model='llama3.2', 
-            messages=[
-                {'role': 'system', 'content': final_prompt},
-                {'role': 'user', 'content': user_input}
-            ],
-            options={'temperature': 0}
+            messages=messages,
+            options={
+                "temperature": 0.0, # Flexibility - Need to check how 0.1 and 0.2 behaves
+                "num_ctx": 4096,     # Have to test with higher ram allowance
+                "top_p": 0.9, # Token sampling accuracy
+                "repeat_penalty": 1.1
+            }
         )
     except Exception as e:
         print(f"Ollama Error: {e}")
@@ -116,7 +152,7 @@ def chat():
     sql_to_confirm = None
 
     if data:
-        # Detect SQL anywhere in the response (Your robust logic)
+        # Detect SQL anywhere in the response
         detected_sql = None
         if "sql" in str(data):
             if "args" in data and isinstance(data["args"], dict):
