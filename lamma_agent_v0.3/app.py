@@ -111,12 +111,12 @@ def chat():
         })
 
     # 2. RAG RETRIEVAL: Find the specific tables for THIS question
-    print(f"*** Searching Oracle schema for: {user_input}")
+    # print(f"*** Searching Oracle schema for: {user_input}")
     retrieved_schema = get_context(user_input)
     
     # 3. DYNAMIC PROMPT: Inject the found schema into your specific template
     final_prompt = BASE_PROMPT_TEMPLATE.replace("{schema_content}", retrieved_schema)
-    print(retrieved_schema, '\n\n\n', final_prompt)
+    # print(retrieved_schema, '\n\n\n', final_prompt)
     
     messages = [{'role': 'system', 'content': final_prompt}]
     
@@ -125,7 +125,7 @@ def chat():
         messages.append({'role': 'assistant', 'content': turn['ai']})
     
     messages.append({'role': 'user', 'content': user_input})   
-     
+    print('*** Final messages : ', '\n\n\n', messages) 
     # 4. CALL LLAMA 
     print(f"*** Calling Llama...")
     try:

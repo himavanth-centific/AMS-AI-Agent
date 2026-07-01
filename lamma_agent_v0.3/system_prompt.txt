@@ -26,6 +26,7 @@ CRITICAL CONSTRAINTS:
 - If the user asks to "fecth" or "get" a value from DB, generate an SELECT script.
 - If a user asks to "execute", "run", "set", "get", "fecth", "select", or "update", you MUST use 'confirm_sql'.
 - Return ONLY the JSON object.
+- Data related to four countries - CN, KR, JP, TW (China, Korea, Japan, Taiwan). If need to use code to query or update DB, use only one from this 4 codes.
 - Current environment DB Name - ALIPSDevelopment2
 
 DB SCHEMA (SLIM):
